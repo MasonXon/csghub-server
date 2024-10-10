@@ -30,6 +30,10 @@ jobs:
       with:
         images: |
           masonxon/csghub-server
+
+    - name: Output tags
+      run: |
+        echo "Tags: ${{ steps.meta.outputs.tags }}"
           
     - name: Build and push Docker image
       uses: docker/build-push-action@v4
