@@ -380,6 +380,11 @@ func (h *RepoHandler) DownloadFile(ctx *gin.Context) {
 			return
 		}
 	}
+
+	s3Internal := ctx.GetHeader("X-OPENCSG-S3-Internal")
+	if s3Internal == "true" {
+		ctx.Set("X-OPENCSG-S3-Internal", true)
+	}
 	reader, size, url, err := h.c.DownloadFile(ctx, req, currentUser)
 	if err != nil {
 		slog.Error("Failed to download repo file", slog.String("repo_type", string(req.RepoType)), slog.Any("error", err))
@@ -725,8 +730,8 @@ func (h *RepoHandler) SDKListFiles(ctx *gin.Context) {
 		httpbase.BadRequest(ctx, err.Error())
 		return
 	}
-
-	files, err := h.c.SDKListFiles(ctx, common.RepoTypeFromContext(ctx), namespace, name, currentUser)
+	ref := ctx.Param("ref")
+	files, err := h.c.SDKListFiles(ctx, common.RepoTypeFromContext(ctx), namespace, name, ref, currentUser)
 	if err != nil {
 		if errors.Is(err, component.ErrUnauthorized) {
 			slog.Error("permission denied when accessing repo", slog.String("repo_type", string(common.RepoTypeFromContext(ctx))), slog.Any("path", fmt.Sprintf("%s/%s", namespace, name)))
@@ -835,6 +840,12 @@ func (h *RepoHandler) handleDownload(ctx *gin.Context, isResolve bool) {
 	} else {
 		branch = ctx.Param("branch")
 	}
+
+	s3Internal := ctx.GetHeader("X-OPENCSG-S3-Internal")
+	if s3Internal == "true" {
+		ctx.Set("X-OPENCSG-S3-Internal", true)
+	}
+
 	req := &types.GetFileReq{
 		Namespace: namespace,
 		Name:      name,

@@ -50,7 +50,7 @@ type RepoComponent struct {
 	rel                *database.RepoRelationsStore
 	mirror             *database.MirrorStore
 	git                gitserver.GitServer
-	s3Client           *minio.Client
+	s3Client           *s3.Client
 	userSvcClient      rpc.UserSvcClient
 	lfsBucket          string
 	uls                *database.UserLikesStore
@@ -947,7 +947,6 @@ func (c *RepoComponent) Tree(ctx context.Context, req *types.GetFileReq) ([]*typ
 		Path:      req.Path,
 		RepoType:  req.RepoType,
 	}
-	getRepoFileTree.Ref = repo.DefaultBranch
 	tree, err := c.git.GetRepoFileTree(ctx, getRepoFileTree)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get git %s repository file tree, error: %w", req.RepoType, err)
@@ -994,7 +993,7 @@ func (c *RepoComponent) UploadFile(ctx context.Context, req *types.CreateFileReq
 	return err
 }
 
-func (c *RepoComponent) SDKListFiles(ctx context.Context, repoType types.RepositoryType, namespace, name, userName string) (*types.SDKFiles, error) {
+func (c *RepoComponent) SDKListFiles(ctx context.Context, repoType types.RepositoryType, namespace, name, ref, userName string) (*types.SDKFiles, error) {
 	var sdkFiles []types.SDKFile
 	repo, err := c.repo.FindByPath(ctx, repoType, namespace, name)
 	if err != nil || repo == nil {
@@ -1009,7 +1008,11 @@ func (c *RepoComponent) SDKListFiles(ctx context.Context, repoType types.Reposit
 		return nil, ErrUnauthorized
 	}
 
-	filePaths, err := getFilePaths(namespace, name, "", repoType, c.git.GetRepoFileTree)
+	if ref == "" {
+		ref = repo.DefaultBranch
+	}
+
+	filePaths, err := getFilePaths(namespace, name, "", repoType, ref, c.git.GetRepoFileTree)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all %s files, error: %w", repoType, err)
 	}
@@ -1552,12 +1555,14 @@ func (c *RepoComponent) MirrorFromSaas(ctx context.Context, namespace, name, cur
 			CreatedAt:   mirror.CreatedAt.Unix(),
 			MirrorToken: syncClientSetting.Token,
 		})
+		repo.SyncStatus = types.SyncStatusPending
+	} else {
+		repo.SyncStatus = types.SyncStatusInProgress
 	}
 
-	repo.SyncStatus = types.SyncStatusInProgress
 	_, err = c.repo.UpdateRepo(ctx, *repo)
 	if err != nil {
-		return fmt.Errorf("failed to update repo sync status")
+		return fmt.Errorf("failed to update repo sync status: %w", err)
 	}
 	return nil
 }
@@ -1567,6 +1572,10 @@ func (c *RepoComponent) mirrorFromSaasSync(ctx context.Context, mirror *database
 	syncClientSetting, err := c.syncClientSetting.First(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to find sync client setting, error: %w", err)
+	}
+	repo, err := c.repo.FindById(ctx, mirror.RepositoryID)
+	if err != nil {
+		return fmt.Errorf("failed to find repo, error: %w", err)
 	}
 	if c.config.GitServer.Type == types.GitServerTypeGitea {
 		err = c.git.MirrorSync(ctx, gitserver.MirrorSyncReq{
@@ -1586,6 +1595,12 @@ func (c *RepoComponent) mirrorFromSaasSync(ctx context.Context, mirror *database
 			CreatedAt:   mirror.CreatedAt.Unix(),
 			MirrorToken: syncClientSetting.Token,
 		})
+		repo.SyncStatus = types.SyncStatusPending
+	}
+
+	_, err = c.repo.UpdateRepo(ctx, *repo)
+	if err != nil {
+		return fmt.Errorf("failed to update repo sync status: %w", err)
 	}
 	return nil
 }
@@ -2425,7 +2440,7 @@ func (c *RepoComponent) AllFiles(ctx context.Context, req types.GetAllFilesReq) 
 			return nil, fmt.Errorf("users do not have permission to get all files for this repo")
 		}
 	}
-	allFiles, err := getAllFiles(req.Namespace, req.Name, "", req.RepoType, c.git.GetRepoFileTree)
+	allFiles, err := getAllFiles(req.Namespace, req.Name, "", req.RepoType, req.Ref, c.git.GetRepoFileTree)
 	if err != nil {
 		slog.Error("fail to get all files of repository", slog.Any("repoType", req.RepoType), slog.String("namespace", req.Namespace), slog.String("name", req.Name), slog.String("error", err.Error()))
 		return nil, err

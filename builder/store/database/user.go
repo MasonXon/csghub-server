@@ -88,6 +88,25 @@ func (s *UserStore) Index(ctx context.Context) (users []User, err error) {
 	return
 }
 
+func (s *UserStore) IndexWithSearch(ctx context.Context, search string, per, page int) (users []User, count int, err error) {
+	search = strings.ToLower(search)
+	query := s.db.Operator.Core.NewSelect().
+		Model(&users)
+	if search != "" {
+		query.Where("LOWER(username) like ? OR LOWER(email) like ?", fmt.Sprintf("%%%s%%", search), fmt.Sprintf("%%%s%%", search))
+	}
+	count, err = query.Count(ctx)
+	if err != nil {
+		return
+	}
+	query.Order("id asc").Limit(per).Offset((page - 1) * per)
+	err = query.Scan(ctx, &users)
+	if err != nil {
+		return
+	}
+	return
+}
+
 func (s *UserStore) FindByUsername(ctx context.Context, username string) (user User, err error) {
 	user.Username = username
 	err = s.db.Operator.Core.NewSelect().Model(&user).Where("username = ?", username).Scan(ctx)
@@ -197,10 +216,13 @@ func (s *UserStore) FindByGitAccessToken(ctx context.Context, token string) (*Us
 	return &user, nil
 }
 
-func (s *UserStore) FindByUUID(ctx context.Context, uuid string) (user User, err error) {
-	user.UUID = uuid
-	err = s.db.Operator.Core.NewSelect().Model(&user).Where("uuid = ?", uuid).Scan(ctx)
-	return
+func (s *UserStore) FindByUUID(ctx context.Context, uuid string) (*User, error) {
+	var user User
+	err := s.db.Operator.Core.NewSelect().Model(&user).Where("uuid = ?", uuid).Scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
 }
 
 func (s *UserStore) GetActiveUserCount(ctx context.Context) (int, error) {
